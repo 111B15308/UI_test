@@ -1,6 +1,8 @@
 import json
 from PyQt5.QtCore import QObject
+from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from view.settings_view import SettingsView
+from view.settings_dialog import SettingsDialog, DroneConfigDialog
 from controller.mission_api import mission_api
 
 class MapController(QObject):
@@ -30,6 +32,7 @@ class MapController(QObject):
         self.view.webview.page().loadFinished.connect(self.sync_model_to_view)
         mission_api.initialize_formation()
         mission_api.start_position_watcher(self.on_drone_states_update)
+        self.view.connect_btn.clicked.connect(self.on_connect_clicked)
 
     def sync_model_to_view(self, reset_center=False):
         """把 model 同步到 view (JS)"""
@@ -51,6 +54,37 @@ class MapController(QObject):
         if len(coords) > 1:
             coord_js = json.dumps(coords)
             self.view.run_js(f"drawPath({coord_js});")
+    
+    def on_connect_clicked(self):
+          """使用者點擊「連線」後的邏輯"""
+          settings_dialog = SettingsDialog()
+          if settings_dialog.exec_() != QtWidgets.QDialog.Accepted:
+              return  # 使用者取消
+    
+          settings = settings_dialog.get_settings()
+          drone_count = settings["drone_count"]
+          formation = settings["formation"]
+    
+          print(f" 選擇 {drone_count} 架無人機，隊形：{formation}")
+    
+          # 一一設定每台無人機
+          drone_configs = []
+          for i in range(drone_count):
+              config_dialog = DroneConfigDialog(i + 1)
+              if config_dialog.exec_() != QtWidgets.QDialog.Accepted:
+                  print(" 使用者取消設定")
+                  return
+    
+              drone_configs.append({
+                  "port": int(config_dialog.port_input.text()),
+                  "alt": config_dialog.alt_input.value(),
+                  "speed": config_dialog.speed_input.value()
+              })
+    
+          print(f"無人機設定完成：{drone_configs}")
+    
+          # 呼叫 mission_api 初始化 DroneKit（背景執行）
+          mission_api.initialize_formation(drone_configs)
 
     def on_add_marker_clicked(self):
         try:
@@ -137,8 +171,7 @@ class MapController(QObject):
                 continue
             js = f"updateDroneMarker({drone_id}, {lat}, {lon});"
             self.view.run_js(js)
-
-
+    
 class SettingsController:
     def __init__(self, model):
         self.model = model

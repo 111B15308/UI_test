@@ -1,5 +1,5 @@
 from dronekit import LocationGlobalRelative, LocationGlobal
-from drone import drone
+from drone.drone import Drone
 import numpy as np
 from model import helpers
 #from helpers import calculate_desired_positions_global, calculate_yaw_angle, interpolate_waypoints, save_all_drone_missions
@@ -9,13 +9,14 @@ from model import formation_setting
 
 
 class FormationFlying(object):
-    def __init__(self):
+    def __init__(self, drone_configs):
         self.num_uavs = formation_setting.formation_params["num_drones"]        
-        self.drones = {
-            #i: Drone(f'tcp:localhost:{formation_setting.connection_port + 10 * (i-1)}')
-            i: drone(f'udp:localhost:{formation_setting.connection_port + 10 * (i-1)}')            
-            for i in range(1, formation_setting.formation_params['num_drones'] + 1)
-        }
+        self.drones = {}
+        for i, cfg in enumerate(drone_configs, start=1):
+            port = cfg["port"]
+            print(f"🛰️ 連線第 {i} 架無人機: udp:localhost:{port}")
+            self.drones[i] = Drone(f"udp:localhost:{port}")
+        print(f"共連線 {len(self.drones)} 架無人機")
         self.takeoff_alt = formation_setting.takeoff_alt
         self.speed = formation_setting.uav_speed  # m/sec
         self.rtl_alt=formation_setting.rtl_alt #cm , dict

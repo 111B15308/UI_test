@@ -1,17 +1,18 @@
 
 import threading
 import time
-
 from drone.formation_flying import FormationFlying
 
 class MissionAPI:
     def __init__(self):
         self._formation = None
 
-    def initialize_formation(self):
+    def initialize_formation(self, drone_configs):
         """初始化群飛 FormationFlying"""
         try:
-            self._formation = FormationFlying()
+            print("正在初始化 FormationFlying...")
+            from drone.formation_flying import FormationFlying
+            self._formation = FormationFlying(drone_configs)
             print("✅ FormationFlying 初始化完成")
         except Exception as e:
             print("❌ FormationFlying 初始化失敗:", e)

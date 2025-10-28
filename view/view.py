@@ -1,4 +1,5 @@
 import os
+from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from PyQt5.QtCore import Qt, QUrl, QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QPushButton
@@ -47,6 +48,12 @@ class MapView(QMainWindow):
         self.fly_btn.clicked.connect(self._on_fly_to_wp1)
         self.seq_btn.clicked.connect(self._on_fly_sequential)
         
+        self.top_bar = QtWidgets.QHBoxLayout()
+        self.connect_btn = QtWidgets.QPushButton("連線")
+        self.top_bar.addWidget(self.connect_btn)
+        self.top_bar.addStretch()
+        self.layout.addLayout(self.top_bar)
+        
     def update_formation(self):
         """根據 model 的 drone_count 和 formation 在地圖上畫出無人機"""
         count = self.model.drone_count
@@ -90,17 +97,14 @@ class MapView(QMainWindow):
         fly_btn.setFixedSize(150, 40)
         seq_btn = QPushButton("依序飛到所有航點")
         seq_btn.setFixedSize(150, 40)
-    
-        v.addWidget(clear_btn)
-        v.addWidget(fly_btn)
-        v.addWidget(seq_btn)
-    
-        # --- 新增兩個按鈕 ---
         stop_btn = QPushButton("緊急停止")
         stop_btn.setFixedSize(150, 40)
         rtl_btn = QPushButton("返回Home")
         rtl_btn.setFixedSize(150, 40)
     
+        v.addWidget(clear_btn)
+        v.addWidget(fly_btn)
+        v.addWidget(seq_btn)
         v.addWidget(stop_btn)
         v.addWidget(rtl_btn)
     
@@ -193,13 +197,13 @@ class MapView(QMainWindow):
                 }}
                 
                 function updateDroneMarker(id, lat, lng) {{
-                    if (droneMarkers[id]) {{
-                        droneMarkers[id].setLatLng([lat, lng]);
+                    if (!window.droneMarkers) window.droneMarkers = {{}};
+                    if (!window.droneMarkers[id]) {{
+                        window.droneMarkers[id] = L.marker([lat, lng], {{icon: droneIcon}}).addTo(map);
                     }} else {{
-                        addDroneMarker(id, lat, lng);
+                        window.droneMarkers[id].setLatLng([lat, lng]);
                     }}
                 }}
-                
                 function addMarker(lat, lng) {{
                     var n = markers.length + 1;
                     var m = L.marker([lat, lng]).addTo(map);
