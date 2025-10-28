@@ -1,0 +1,8 @@
+dronekit==2.9.2
+future==1.0.0
+geographiclib==2.0
+geopy==2.4.1
+lxml==6.0.0
+monotonic==1.6
+numpy==2.3.1
+pymavlink==2.4.47
