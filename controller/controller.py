@@ -2,7 +2,8 @@ import json
 from PyQt5.QtCore import QObject
 from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from view.settings_view import SettingsView
-from view.settings_dialog import SettingsDialog, DroneConfigDialog
+from view.settings_dialog import SettingsDialog
+from view.drone_config_dialog import DroneConfigDialog
 from controller.mission_api import mission_api
 
 class MapController(QObject):
@@ -30,8 +31,6 @@ class MapController(QObject):
 
         # IMPORTANT: 等 WebView 載入完成後再 sync（避免 setCenter 等函式尚未定義）
         self.view.webview.page().loadFinished.connect(self.sync_model_to_view)
-        mission_api.initialize_formation()
-        mission_api.start_position_watcher(self.on_drone_states_update)
         self.view.connect_btn.clicked.connect(self.on_connect_clicked)
 
     def sync_model_to_view(self, reset_center=False):
@@ -82,9 +81,8 @@ class MapController(QObject):
               })
     
           print(f"無人機設定完成：{drone_configs}")
-    
-          # 呼叫 mission_api 初始化 DroneKit（背景執行）
           mission_api.initialize_formation(drone_configs)
+          mission_api.start_position_watcher(self.on_drone_states_update)
 
     def on_add_marker_clicked(self):
         try:

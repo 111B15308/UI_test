@@ -25,13 +25,13 @@ class MapView(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        central.setLayout(layout)
+        self.main_layout = QVBoxLayout()
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        central.setLayout(self.main_layout)
 
         # Leaflet map webview
         self.webview = QWebEngineView()
-        layout.addWidget(self.webview)
+        self.main_layout.addWidget(self.webview)
 
         # 建立 QWebChannel 橋接
         self.channel = QWebChannel()
@@ -48,11 +48,11 @@ class MapView(QMainWindow):
         self.fly_btn.clicked.connect(self._on_fly_to_wp1)
         self.seq_btn.clicked.connect(self._on_fly_sequential)
         
-        self.top_bar = QtWidgets.QHBoxLayout()
+        self.connect_bar = QtWidgets.QHBoxLayout()
         self.connect_btn = QtWidgets.QPushButton("連線")
-        self.top_bar.addWidget(self.connect_btn)
-        self.top_bar.addStretch()
-        self.layout.addLayout(self.top_bar)
+        self.connect_bar.addWidget(self.connect_btn)
+        self.connect_bar.addStretch()
+        self.main_layout.addLayout(self.connect_bar)
         
     def update_formation(self):
         """根據 model 的 drone_count 和 formation 在地圖上畫出無人機"""

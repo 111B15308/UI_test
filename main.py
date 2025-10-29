@@ -25,10 +25,6 @@ def main():
 
     # === Controller ===
     controller = MapController(model, view)
-
-    # === 任務控制（DroneKit橋接初始化） ===
-    mission_api.initialize_formation()
-
     # === 開啟設定視窗（選擇無人機數量與隊形） ===
     #settings_ctrl = SettingsController(model)
     #settings_ctrl.view.show()
