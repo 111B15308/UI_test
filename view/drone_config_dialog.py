@@ -3,15 +3,10 @@ from PyQt5 import QtWidgets, QtGui
 class DroneConfigDialog(QtWidgets.QDialog):
     def __init__(self, index):
         super().__init__()
-        self.setWindowTitle(f"第 {index} 台無人機")
-        self.resize(300, 100)
+        self.setWindowTitle(f"第 {index} 台無人機設定")
+        self.resize(300, 120)
 
         layout = QtWidgets.QFormLayout(self)
-
-        # Port (輸入框 + 驗證)
-        self.port_input = QtWidgets.QLineEdit()
-        self.port_input.setPlaceholderText("輸入 Port (1000~10000)")
-        self.port_input.setValidator(QtGui.QIntValidator(1, 99999))
 
         # 高度 (1~30 公尺)
         self.alt_input = QtWidgets.QSpinBox()
@@ -21,16 +16,14 @@ class DroneConfigDialog(QtWidgets.QDialog):
         # 速度 (1~10 m/s)
         self.speed_input = QtWidgets.QDoubleSpinBox()
         self.speed_input.setRange(1, 10)
-        self.speed_input.setValue(5)
         self.speed_input.setDecimals(1)
+        self.speed_input.setValue(5.0)
 
-        layout.addRow("Port:", self.port_input)
-        layout.addRow("高度 (m):", self.alt_input)
-        layout.addRow("速度 (m/s):", self.speed_input)
+        layout.addRow("起飛高度 (m):", self.alt_input)
+        layout.addRow("飛行速度 (m/s):", self.speed_input)
 
-        # 確認按鈕
         self.confirm_btn = QtWidgets.QPushButton("確認")
-        self.confirm_btn.clicked.connect(self.validate_and_accept)
+        self.confirm_btn.clicked.connect(self.accept)
         layout.addRow(self.confirm_btn)
 
     def validate_and_accept(self):

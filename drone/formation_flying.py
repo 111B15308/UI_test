@@ -1,53 +1,59 @@
 from dronekit import LocationGlobalRelative, LocationGlobal
 from drone.drone import Drone
 import numpy as np
-from model import helpers
-from model import formation_setting
+from model import formation_setting, helpers
 #from helpers import calculate_desired_positions_global, calculate_yaw_angle, interpolate_waypoints, save_all_drone_missions
 import time
 from geopy.distance import geodesic
 
+
 class FormationFlying(object):
-    class FormationFlying(object):
-        def __init__(self, drone_configs):
-            """
-            drone_configs: 使用者在設定視窗中輸入的資料列表，例如：
-            [
-                {"port": 5760, "alt": 15, "speed": 5.0},
-                {"port": 5770, "alt": 17, "speed": 5.0},
-                {"port": 5780, "alt": 13, "speed": 5.0},
-            ]
-            """
-            self.num_uavs = len(drone_configs)
-            self.drones = {}
+    def __init__(self, drone_configs):
+        """
+        drone_configs: 使用者設定，例如：
+        [
+            {"alt": 15, "speed": 5.0},
+            {"alt": 17, "speed": 5.0},
+            {"alt": 13, "speed": 5.0},
+        ]
+        """
 
-            print(f"初始化FormationFlying，共 {self.num_uavs} 架無人機")
+        self.num_uavs = len(drone_configs)
+        self.drones = {}
+        self.base_port = 14550  # 第一台 SITL 的主 TCP port
+        print(f"🧩 初始化 FormationFlying，共 {self.num_uavs} 架無人機")
 
-            for i, cfg in enumerate(drone_configs, start=1):
-                port = cfg["port"]
-                print(f"連線第 {i} 架無人機: udp:localhost:{port}")
-                try:
-                    self.drones[i] = Drone(f"udp:localhost:{port}")
-                except Exception as e:
-                    print(f"第 {i} 架無人機連線失敗 ({port}):", e)
+        # ==============================
+        # ✅ 每台 DroneKit 自動連接對應埠
+        # ==============================
+        for i, cfg in enumerate(drone_configs, start=1):
+            # 每個 SITL instance 會自動啟在 5760, 5770, 5780... (由 drone_launcher 控制)
+            port = self.base_port + (i - 1) * 10
+            conn_str = f"tcp:127.0.0.1:{port}"
+            print(f"🔗 嘗試連線第 {i} 架無人機 ({conn_str}) ...")
+            try:
+                self.drones[i] = Drone(conn_str)
+                print(f"✅ 第 {i} 架無人機已連線成功")
+            except Exception as e:
+                print(f"❌ 第 {i} 架無人機連線失敗 ({port}): {e}")
 
-            print(f"✅ 成功連線 {len(self.drones)} 架無人機")
+        print(f"📡 成功連線 {len(self.drones)} 架無人機")
 
-            # 將使用者設定的高度、速度整合為字典，方便後續調用
-            self.takeoff_alt = {i: cfg["alt"] for i, cfg in enumerate(drone_configs, start=1)}
-            self.speed = {i: cfg["speed"] for i, cfg in enumerate(drone_configs, start=1)}
+        # ==============================
+        # ✅ 將高度、速度、RTL 高度整合
+        # ==============================
+        self.takeoff_alt = {i: cfg["alt"] for i, cfg in enumerate(drone_configs, start=1)}
+        self.speed = {i: cfg["speed"] for i, cfg in enumerate(drone_configs, start=1)}
 
-            # RTL 高度（如果 formation_setting 有提供預設）
-            if hasattr(formation_setting, "rtl_alt"):
-                self.rtl_alt = formation_setting.rtl_alt
-            else:
-                # 若無設定，就用每台高度的 0.8 倍當返航高度
-                self.rtl_alt = {i: int(self.takeoff_alt[i] * 100 * 0.8) for i in range(1, self.num_uavs + 1)}
+        if hasattr(formation_setting, "rtl_alt"):
+            self.rtl_alt = formation_setting.rtl_alt
+        else:
+            self.rtl_alt = {i: int(self.takeoff_alt[i] * 100 * 0.8) for i in range(1, self.num_uavs + 1)}
 
-            print(f"起飛高度: {self.takeoff_alt}")
-            print(f"飛行速度: {self.speed}")
-            print(f"RTL 高度: {self.rtl_alt}")
-   
+        print("🪶 起飛高度:", self.takeoff_alt)
+        print("⚡ 飛行速度:", self.speed)
+        print("🔁 RTL 高度:", self.rtl_alt)
+
     def set_rtl_alt_all(self): ##設定RTL高度，依照起飛高度，也就是飛行高度
        for i, drone in self.drones.items():               
             if (drone.set_rtl_alt(self.rtl_alt[i])==True):

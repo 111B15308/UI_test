@@ -1,0 +1,42 @@
+[
+  {
+    "id": 0,
+    "name": "Leader",
+    "home": [22.90494, 120.27240, 27.48, 0],
+    "model": "quad",
+    "sitl_port": 5760,
+    "out_port": 14550
+  },
+  {
+    "id": 1,
+    "name": "Follower1",
+    "home": [22.90514, 120.27260, 27.48, 0],
+    "model": "quad",
+    "sitl_port": 5770,
+    "out_port": 14551
+  },
+  {
+    "id": 2,
+    "name": "Follower2",
+    "home": [22.90534, 120.27280, 27.48, 0],
+    "model": "quad",
+    "sitl_port": 5780,
+    "out_port": 14552
+  },
+  {
+    "id": 3,
+    "name": "Follower3",
+    "home": [22.90554, 120.27300, 27.48, 0],
+    "model": "quad",
+    "sitl_port": 5790,
+    "out_port": 14553
+  },
+  {
+    "id": 4,
+    "name": "Follower4",
+    "home": [22.90574, 120.27320, 27.48, 0],
+    "model": "quad",
+    "sitl_port": 5800,
+    "out_port": 14554
+  }
+]

@@ -75,7 +75,7 @@ class MapController(QObject):
                   return
     
               drone_configs.append({
-                  "port": int(config_dialog.port_input.text()),
+                  #"port": int(config_dialog.port_input.text()),
                   "alt": config_dialog.alt_input.value(),
                   "speed": config_dialog.speed_input.value()
               })

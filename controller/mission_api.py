@@ -3,76 +3,31 @@ import threading
 import time
 import os
 import sys
-
-from drone.formation_flying import FormationFlying
+import inspect
+from drone.formation_flying import FormationFlying 
+from controller.drone_launcher import launch_drones, shutdown_all
 
 
 class MissionAPI:
     def __init__(self):
         self._formation = None
         self._sitl_processes = []
-        self._sitl_base_port = 5760  # 預設第一台埠號
-
-    # -------------------------------
-    # 自動啟動多個 SITL 實例
-    # -------------------------------
-    def _launch_sitl_instances(self, drone_configs):
-        """根據無人機設定啟動對應數量的 SITL 實例"""
-        print(" 啟動 SITL 模擬器...")
-
-        base_home = [22.90494, 120.27240, 27.48, 0]  # 長榮大學 圖書館前，機頭朝北
-
-        # 嘗試找出 dronekit-sitl 執行方式（Windows 可能要用 python -m）
-        use_python_module = False
-        try:
-            subprocess.run(["dronekit-sitl", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except FileNotFoundError:
-            use_python_module = True
-            print("⚠️ 找不到 dronekit-sitl 可執行檔，改用 'python -m dronekit_sitl' 啟動")
-
-        # 啟動 SITL 實例
-        for i, cfg in enumerate(drone_configs):
-            port = cfg["port"]
-            instance = i
-            lat = base_home[0] + i * 0.0002
-            lon = base_home[1] + i * 0.0002
-            home = f"--home={lat},{lon},{base_home[2]},{base_home[3]}"
-
-            if use_python_module:
-                cmd = [sys.executable, "-m", "dronekit_sitl", "copter", "--instance", str(instance), home, f"--udp:{port}"]
-            else:
-                cmd = ["dronekit-sitl", "copter", "--instance", str(instance), home, f"--udp:{port}"]
-
-            print(f"啟動第 {i+1} 架 SITL: {' '.join(cmd)}")
-
-            # 啟動子程序 (獨立執行 SITL)
-            try:
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                self._sitl_processes.append(process)
-                time.sleep(3)  # 稍等避免同時啟動造成衝突
-            except Exception as e:
-                print(f"無法啟動第 {i+1} 架 SITL ({port}):", e)
-
-        # 等待所有 SITL 啟動穩定
-        print("⌛ 等待 SITL 初始化...")
-        time.sleep(8)
-        print("✅ 所有 SITL 模擬器已啟動完成。")
-
+        self._mavproxy_processes = []
     # -------------------------------
     # 初始化群飛
     # -------------------------------
     def initialize_formation(self, drone_configs):
         """初始化群飛 FormationFlying"""
         try:
-            # 啟動 SITL
-            self._launch_sitl_instances(drone_configs)
+            drone_count = len(drone_configs)
+            self._sitl_processes, self._mavproxy_processes = launch_drones(drone_count)
             print("🧩 正在初始化 FormationFlying...")
-
-            # 啟動 FormationFlying 並嘗試連線
+            from drone.formation_flying import FormationFlying
             self._formation = FormationFlying(drone_configs)
             print("✅ FormationFlying 初始化完成")
         except Exception as e:
-            print("FormationFlying 初始化失敗:", e)
+            print("❌ FormationFlying 初始化失敗:", e)
+
 
     # -------------------------------
     # 開始任務
