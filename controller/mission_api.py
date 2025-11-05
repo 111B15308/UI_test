@@ -5,7 +5,8 @@ import os
 import sys
 import inspect
 from drone.formation_flying import FormationFlying 
-from controller.drone_launcher import launch_drones, shutdown_all
+from drone.drone import Drone 
+from controller.drone_launcher import launch_sitl
 
 
 class MissionAPI:
@@ -20,11 +21,16 @@ class MissionAPI:
         """初始化群飛 FormationFlying"""
         try:
             drone_count = len(drone_configs)
-            self._sitl_processes, self._mavproxy_processes = launch_drones(drone_count)
+            self._sitl_processes = launch_sitl(drone_count)
             print("🧩 正在初始化 FormationFlying...")
             from drone.formation_flying import FormationFlying
             self._formation = FormationFlying(drone_configs)
             print("✅ FormationFlying 初始化完成")
+            def print_positions(states):
+                for i, s in states.items():
+                    print(f"🛰️ Drone {i}: lat={s['lat']:.6f}, lon={s['lon']:.6f}, "
+                        f"alt={s['alt']:.1f}, mode={s['mode']}")
+            self.start_position_watcher(print_positions)
         except Exception as e:
             print("❌ FormationFlying 初始化失敗:", e)
 
@@ -83,17 +89,26 @@ class MissionAPI:
 
         def _watch():
             while True:
+                states = {}
                 try:
-                    states = {}
-                    for i, drone in self._formation.drones.items():
-                        states[i] = drone.get_state()
-                    callback(states)
+                    for i, link in self._formation.drones.items():
+                        state = link.recv_match(type='GLOBAL_POSITION_INT', blocking=False) 
+                    if state:
+                        states[i] = {
+                            "lat": state.lat / 1e7,
+                            "lon": state.lon / 1e7,
+                            "alt": state.relative_alt / 1000.0
+                        }
+                    if states:  # 至少有一架狀態正常才回傳
+                        callback(states)
+
                     time.sleep(1)
                 except Exception as e:
-                    print("❌ 位置更新錯誤:", e)
+                    print("❌ 位置更新錯誤 (主線程):", e)
                     break
 
         threading.Thread(target=_watch, daemon=True).start()
+
 
     # -------------------------------
     # 關閉 SITL

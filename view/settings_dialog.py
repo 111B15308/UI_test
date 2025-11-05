@@ -36,6 +36,6 @@ class SettingsDialog(QtWidgets.QDialog):
         """回傳使用者選擇的設定"""
         count_map = {0: 1, 1: 3, 2: 5}  # 對應 ComboBox 的索引
         return {
-            "drone_count": count_map.get(self.combo_drone_count.currentIndex(), 1),
+            "drone_count" : count_map[self.combo_drone_count.currentIndex()],
             "formation": self.combo_formation.currentText()
         }

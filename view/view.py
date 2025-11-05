@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
-from PyQt5.QtWidgets import QComboBox
+from PyQt5.QtWidgets import QComboBox, QLabel
 
 
 class Bridge(QObject):
@@ -14,9 +14,10 @@ class Bridge(QObject):
 
 
 class MapView(QMainWindow):
-    def __init__(self, model):
+    def __init__(self, model, drone_count):
         super().__init__()
         self.model = model
+        self.status_panels = []
         self.setWindowTitle("Simulator Map (MVC)")
         self.setGeometry(100, 100, 1280, 800)
         
@@ -41,7 +42,7 @@ class MapView(QMainWindow):
 
         # overlay control bar
         self._create_overlay_controls()
-        self._load_map_html()
+        self._load_map_html(drone_count)
 
         # 綁定按鈕
         self.clear_btn.clicked.connect(self._on_clear_markers)
@@ -53,7 +54,15 @@ class MapView(QMainWindow):
         self.connect_bar.addWidget(self.connect_btn)
         self.connect_bar.addStretch()
         self.main_layout.addLayout(self.connect_bar)
-        
+
+    def update_drone_positions(self, states):
+        """更新地圖上無人機圖標位置"""
+        if not hasattr(self, "webview"):
+            return
+
+        js_code = f"updateAllDrones({{json.dumps(states)}});"
+        self.webview.page().runJavaScript(js_code)
+
     def update_formation(self):
         """根據 model 的 drone_count 和 formation 在地圖上畫出無人機"""
         count = self.model.drone_count
@@ -101,32 +110,90 @@ class MapView(QMainWindow):
         stop_btn.setFixedSize(150, 40)
         rtl_btn = QPushButton("返回Home")
         rtl_btn.setFixedSize(150, 40)
-    
+
         v.addWidget(clear_btn)
         v.addWidget(fly_btn)
         v.addWidget(seq_btn)
         v.addWidget(stop_btn)
         v.addWidget(rtl_btn)
-    
+
+
         # --- 保存引用以便在 controller 綁定 ---
         self.clear_btn = clear_btn
         self.fly_btn = fly_btn
         self.seq_btn = seq_btn
         self.stop_btn = stop_btn
         self.rtl_btn = rtl_btn
-    
+
         # --- 固定位置與大小 ---
         self.top_bar.setFixedWidth(170)
         self.top_bar.setFixedHeight(500)
         self.top_bar.move(self.width() - 180, 20)
         self.top_bar.show()
 
+    
+    def create_status_panels(self, drone_count):
+        """根據 drone_count 動態生成左側無人機狀態欄"""
+        for panel in self.status_panels:
+            panel.setParent(None)
+        self.status_panels.clear()
 
-    def resizeEvent(self, event):
-        self.top_bar.move(self.width() - 180, 20)
-        super().resizeEvent(event)
+        y_offset = 0
+        for i in range(drone_count):
+            panel = QtWidgets.QWidget(self)
+            panel.setStyleSheet("background: rgba(0,0,0,0.6); color: white; border-radius: 6px;")
+            panel.setFixedSize(150, 120)
 
-    def _load_map_html(self):
+            layout = QtWidgets.QVBoxLayout(panel)
+            layout.setContentsMargins(8, 8, 8, 8)
+            layout.setSpacing(5)
+
+            label_name = QtWidgets.QLabel(f" Drone {i+1}")
+            label_speed = QtWidgets.QLabel(" 速度: 0 m/s")
+            label_alt = QtWidgets.QLabel(" 高度: 0 m")
+            label_mode = QtWidgets.QLabel(" 模式: N/A")
+            label_yaw = QtWidgets.QLabel(" 頭朝向: 0°")
+
+            layout.addWidget(label_name)
+            layout.addWidget(label_speed)
+            layout.addWidget(label_alt)
+            layout.addWidget(label_mode)
+            layout.addWidget(label_yaw)
+
+            panel.move(20, y_offset)
+            panel.show()
+
+            # 存 panel 及 label 以便更新
+            self.status_panels.append({
+                "panel": panel,
+                "speed": label_speed,
+                "alt": label_alt,
+                "mode": label_mode,
+                "yaw": label_yaw
+            })
+
+            y_offset += 130  # panel 高度 + 間距
+
+    def update_status(self, drone_states):
+        """
+        動態更新每台無人機的狀態
+        drone_states: list of dict
+        例如:
+        [
+            {"speed": 5, "alt": 15, "mode": "GUIDED", "yaw": 90},
+            {"speed": 4, "alt": 16, "mode": "GUIDED", "yaw": 45},
+        ]
+        """
+        for i, state in enumerate(drone_states):
+            if i >= len(self.status_panels):
+                break
+            panel_info = self.status_panels[i]
+            panel_info["speed"].setText(f"速度: {state.get('speed',0)} m/s")
+            panel_info["alt"].setText(f"高度: {state.get('alt',0)} m")
+            panel_info["mode"].setText(f"模式: {state.get('mode','N/A')}")
+            panel_info["yaw"].setText(f"頭朝向: {state.get('yaw',0)}°")  
+
+    def _load_map_html(self, drone_count):
         drone_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "picture", "drone.png"))
         drone_url = QUrl.fromLocalFile(drone_path).toString()
         html = f"""
@@ -175,6 +242,7 @@ class MapView(QMainWindow):
                 var polylines = [];
 
                 // 無人機圖示
+                var droneCount = {drone_count};
                 var droneIcon = L.icon({{
                     iconUrl: '{drone_url}',
                     iconSize: [48, 48],
@@ -189,6 +257,17 @@ class MapView(QMainWindow):
                     rotationOrigin: "center center"
                 }}).addTo(map);
                 droneMarker.bindPopup("無人機位置");
+                // 初始化多台無人機
+                for (var i = 0; i < droneCount; i++) {{
+                    var lat = 22.9048880 + i*0.0001;  // 位置偏移避免疊在一起
+                    var lng = 120.2719823;
+                    droneMarkers[i] = L.marker([lat, lng], {{
+                        icon: droneIcon,
+                        rotationAngle: 0,
+                        rotationOrigin: 'center center'
+                    }}).addTo(map);
+                    droneMarkers[i].bindPopup("Drone " + (i+1));
+                }}
 
                 function addDroneMarker(id, lat, lng) {{
                     var m = L.marker([lat, lng], {{icon: droneIcon}}).addTo(map);
@@ -294,6 +373,34 @@ class MapView(QMainWindow):
                         window.qtbridge.waypointAdded(e.latlng.lat, e.latlng.lng);
                     }}
                 }});
+
+                function updateAllDrones(states_json) {{
+                    try {{
+                        var states = JSON.parse(states_json);
+                        for (var id in states) {{
+                            var s = states[id];
+                            var lat = s.lat;
+                            var lon = s.lon;
+                            var yaw = s.yaw || 0;
+
+                            // 若地圖上沒這台無人機，就新增一個 marker
+                            if (!droneMarkers[id]) {{
+                                droneMarkers[id] = L.marker([lat, lon], {{
+                                    icon: droneIcon,
+                                    rotationAngle: yaw,
+                                    rotationOrigin: "center center"
+                                }}).addTo(map);
+                                droneMarkers[id].bindPopup("Drone " + id);
+                            }} else {{
+                                // 更新位置與角度
+                                droneMarkers[id].setLatLng([lat, lon]);
+                                droneMarkers[id].setRotationAngle(yaw);
+                            }}
+                        }}
+                    }} catch (e) {{
+                        console.error("⚠️ 更新無人機圖標失敗:", e);
+                    }}
+                }}                                 
             </script>
         </body>
         </html>

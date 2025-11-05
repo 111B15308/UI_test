@@ -1,7 +1,7 @@
 import json
 from PyQt5.QtCore import QObject
 from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
-from view.settings_view import SettingsView
+from view.settings_dialog import SettingsDialog
 from view.settings_dialog import SettingsDialog
 from view.drone_config_dialog import DroneConfigDialog
 from controller.mission_api import mission_api
@@ -32,6 +32,7 @@ class MapController(QObject):
         # IMPORTANT: 等 WebView 載入完成後再 sync（避免 setCenter 等函式尚未定義）
         self.view.webview.page().loadFinished.connect(self.sync_model_to_view)
         self.view.connect_btn.clicked.connect(self.on_connect_clicked)
+        mission_api.start_position_watcher(self.on_drone_states_update)
 
     def sync_model_to_view(self, reset_center=False):
         """把 model 同步到 view (JS)"""
@@ -161,14 +162,13 @@ class MapController(QObject):
             print("啟動任務失敗：", e)
     
     def on_drone_states_update(self, states):
-        """每秒更新地圖上的無人機位置"""
-        for drone_id, s in states.items():
-            lat = s.get("GlobalLat")
-            lon = s.get("GlobalLon")
-            if lat is None or lon is None:
-                continue
-            js = f"updateDroneMarker({drone_id}, {lat}, {lon});"
-            self.view.run_js(js)
+        """接收 mission_api 回報的無人機狀態，轉給 view 更新地圖"""
+        # states 是個 dict，例如：
+        # {1: {'lat':22.9, 'lon':120.27, 'yaw':90.2}, 2: {...}, ...}
+        try:
+            self.view.update_drone_positions(states)
+        except Exception as e:
+            print(f"⚠️ 更新地圖時發生錯誤: {e}")
     
 class SettingsController:
     def __init__(self, model):
