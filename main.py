@@ -32,7 +32,7 @@ def main():
     view.create_status_panels(drone_count)  # 生成左側無人機狀態面板
 
     # === Controller ===
-    controller = MapController(model, view)
+    controller = MapController(model, view, drone_count)
 
     # === 顯示主畫面 ===
     view.show()

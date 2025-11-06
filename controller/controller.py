@@ -2,15 +2,18 @@ import json
 from PyQt5.QtCore import QObject
 from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from view.settings_dialog import SettingsDialog
-from view.settings_dialog import SettingsDialog
 from view.drone_config_dialog import DroneConfigDialog
 from controller.mission_api import mission_api
+from dronekit import connect
+from drone.drone import Drone
+import time
 
 class MapController(QObject):
-    def __init__(self, model, view):
+    def __init__(self, model, view, drone_count):
         super().__init__()
         self.model = model
         self.view = view
+        self.drones = []
 
         # connect UI buttons (top_bar 隱藏但按鈕物件存在)
         try:
@@ -31,7 +34,7 @@ class MapController(QObject):
 
         # IMPORTANT: 等 WebView 載入完成後再 sync（避免 setCenter 等函式尚未定義）
         self.view.webview.page().loadFinished.connect(self.sync_model_to_view)
-        self.view.connect_btn.clicked.connect(self.on_connect_clicked)
+        self.view.connect_btn.clicked.connect(lambda: self.on_connect_clicked(drone_count))
         mission_api.start_position_watcher(self.on_drone_states_update)
 
     def sync_model_to_view(self, reset_center=False):
@@ -55,35 +58,53 @@ class MapController(QObject):
             coord_js = json.dumps(coords)
             self.view.run_js(f"drawPath({coord_js});")
     
-    def on_connect_clicked(self):
-          """使用者點擊「連線」後的邏輯"""
-          settings_dialog = SettingsDialog()
-          if settings_dialog.exec_() != QtWidgets.QDialog.Accepted:
-              return  # 使用者取消
-    
-          settings = settings_dialog.get_settings()
-          drone_count = settings["drone_count"]
-          formation = settings["formation"]
-    
-          print(f" 選擇 {drone_count} 架無人機，隊形：{formation}")
-    
-          # 一一設定每台無人機
-          drone_configs = []
-          for i in range(drone_count):
-              config_dialog = DroneConfigDialog(i + 1)
-              if config_dialog.exec_() != QtWidgets.QDialog.Accepted:
-                  print(" 使用者取消設定")
-                  return
-    
-              drone_configs.append({
-                  #"port": int(config_dialog.port_input.text()),
-                  "alt": config_dialog.alt_input.value(),
-                  "speed": config_dialog.speed_input.value()
-              })
-    
-          print(f"無人機設定完成：{drone_configs}")
-          mission_api.initialize_formation(drone_configs)
-          mission_api.start_position_watcher(self.on_drone_states_update)
+    def on_connect_clicked(self, drone_count):
+        """使用者點擊「連線」後的邏輯"""
+        # 一一設定每台無人機
+        if not hasattr(self, "drones"):
+            self.drones = []
+
+        for i in range(drone_count):
+            # 若已連線成功，跳過不重設
+            if i < len(self.drones) and self.drones[i].connected:
+                print(f"🟢 Vehicle{i+1} 已連線，跳過設定。")
+                continue
+            config_dialog = DroneConfigDialog(i + 1)
+            if config_dialog.exec_() != QtWidgets.QDialog.Accepted:
+                print(" 使用者取消設定")
+                return
+            address = config_dialog.addr_input.text().strip()
+            port = int(config_dialog.port_input.text())
+            alt = config_dialog.alt_input.value()
+            speed = config_dialog.speed_input.value()
+            connection_str = f"udp:{address}:{port}"
+
+            # 若該 index 已存在 Drone 物件 → 更新；否則新增
+            if i < len(self.drones):
+                drone = self.drones[i]
+                drone.connection_string = connection_str
+                drone.alt = alt
+                drone.speed = speed
+                if not drone.connected:
+                    print(f"🔁 重新嘗試連線 vehicle{i+1}...")
+                    try:
+                        drone = Drone(i + 1, connection_str, alt, speed)
+                        drone.connected = True
+                        self.drones.append(drone)
+                    except Exception as e:
+                        drone.connected = False
+                        print(f"❌ vehicle{i+1} 重新連線失敗：{e}")
+            else:
+                drone = Drone(i + 1, connection_str, alt, speed)
+                vehicle = drone.vehicle
+                self.drones.append(drone)
+        self.drones.sort(key=lambda drone: drone.id)
+        success_count = sum(1 for d in self.drones if d.connected)
+        print(f"📡 成功連線 {success_count}/{drone_count} 台無人機")
+
+        
+
+          
 
     def on_add_marker_clicked(self):
         try:

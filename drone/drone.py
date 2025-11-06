@@ -10,20 +10,23 @@ class Drone:
     可直接連線至 SITL 或真機 MAVLink 端口
     """
 
-    def __init__(self, connection_string):
-        print(f"🔗 嘗試連線至無人機: {connection_string}")
-        self.connection = None
+    def __init__(self, drone_id,  connection_string, alt, speed):
+        self.id = drone_id
+        self.connection_string = connection_string
+        self.alt = alt
+        self.speed = speed
+        self.vehicle = None
         self.connected = False
+
+        print(f"🔗 嘗試連線至無人機 vehicle{drone_id}: {connection_string}")
+
         try:
-            self.connection = mavutil.mavlink_connection(connection_string)
-            print("⌛ 等待 HEARTBEAT ...")
-            hb = self.connection.recv_match(type='HEARTBEAT', blocking=True, timeout=30)
-            if not hb:
-                raise TimeoutError("Heartbeat timeout")
-            print("✅ 連線成功，接收到 HEARTBEAT")
+            self.vehicle = connect(connection_string, wait_ready=True, timeout=20)
             self.connected = True
+            print(f"✅ vehicle{drone_id} 連線成功！")
         except Exception as e:
-            print(f"❌ 無法連線至無人機: {e}")
+            self.connected = False
+            print(f"❌ vehicle{drone_id} 連線失敗：{e}")
 
     # ----------------------------------------------------------
     # 模式控制
