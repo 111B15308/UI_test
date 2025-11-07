@@ -1,4 +1,5 @@
 from PyQt5.QtCore import QObject, pyqtSignal
+from drone.drone import Drone
 
 class MapModel(QObject):
     # === Signals ===
@@ -16,6 +17,7 @@ class MapModel(QObject):
         self.drone_count = 0
         self.formation = "Line"
         self.drone_configs = []
+        self.drones = []
 
     # === Map 狀態 ===
     @property
@@ -48,6 +50,7 @@ class MapModel(QObject):
         self._markers = []
         self.state_changed.emit()
 
+
     # === 無人機控制 ===
     def emergency_stop(self):
         """UI 呼叫的緊急停止 -> 轉到 mission_api"""
@@ -64,3 +67,15 @@ class MapModel(QObject):
             mission_api.rtl_all()
         except Exception as e:
             print("return_to_launch error:", e)
+    
+    def init_drones(self):
+        """根據 drone_count 與 drone_configs 初始化 Drone 物件"""
+        self.drones = []
+        for i, cfg in enumerate(self.drone_configs):
+            drone = Drone(
+                drone_id=i + 1,
+                connection_string=cfg.get("connection_string", ""),
+                alt=cfg.get("alt", 15),
+                speed=cfg.get("speed", 5.0)
+            )
+            self.drones.append(drone)

@@ -1,8 +1,11 @@
+import dronekit
 from dronekit import connect, VehicleMode, LocationGlobalRelative
 from pymavlink import mavutil
 import time
+from PyQt5 import QtWidgets
 from model import formation_setting
 from geopy.distance import geodesic
+
 
 class Drone:
     """
@@ -26,6 +29,7 @@ class Drone:
             print(f"✅ vehicle{drone_id} 連線成功！")
         except Exception as e:
             self.connected = False
+            self.vehicle = None
             print(f"❌ vehicle{drone_id} 連線失敗：{e}")
 
     # ----------------------------------------------------------
@@ -50,24 +54,63 @@ class Drone:
         )
         print(f"🧭 切換模式為: {mode_name}")
 
-    def arm_and_takeoff(self, alt=10):
-        if not self.connection:
-            return
-        print("🌀 解鎖馬達...")
-        self.connection.mav.command_long_send(
-            self.connection.target_system,
-            self.connection.target_component,
-            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0, 1, 0, 0, 0, 0, 0, 0
-        )
-        time.sleep(2)
-        print(f"🚁 起飛至 {alt} 公尺")
-        self.connection.mav.command_long_send(
-            self.connection.target_system,
-            self.connection.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            0, 0, 0, 0, 0, 0, 0, alt
-        )
+    def set_guided_and_arm(self):
+        """
+        設定為 GUIDED 模式並解鎖
+        """
+        if not self.connected or self.vehicle is None:
+            raise RuntimeError(f"Drone {self.id}: vehicle 尚未初始化")
+        v = self.vehicle
+
+        while not v.is_armable:
+            print(f"Drone {self.id}: 等待初始化中...")
+            time.sleep(1)
+
+        # 切換為 GUIDED 模式
+        while v.mode.name != "GUIDED":
+            v.mode = VehicleMode("GUIDED")
+            time.sleep(1)
+        print(f"Drone {self.id}: 模式切換為 GUIDED")
+
+        # 解鎖
+        v.armed = True
+        while not v.armed:
+            print(f"Drone {self.id}: 等待解鎖...")
+            time.sleep(1)
+        print(f"✅ Drone {self.id}: 已解鎖完成")
+
+        time.sleep(2)  # 讓槳轉穩定一點
+
+    def takeoff(self, target_alt):
+        """
+        起飛到設定高度 (阻塞直到達到目標高度)
+        """
+        if not self.connected or self.vehicle is None:
+            raise RuntimeError(f"Drone {self.id}: vehicle 尚未初始化")
+
+        print(f"Drone {self.id}: 起飛至 {target_alt} 公尺...")
+
+        # 送出起飛命令
+        self.vehicle.simple_takeoff(target_alt)
+
+        # 進入阻塞式等待
+        while True:
+            current_alt = self.vehicle.location.global_relative_frame.alt
+
+            print(f"Drone {self.id}: 正在上升，目前高度 = {current_alt:.2f} m")
+            
+            # ✅ 讓 PyQt 的事件能繼續處理（避免 UI 卡死）
+            QtWidgets.QApplication.processEvents()
+
+            # 若達到目標高度的 95%，就視為起飛完成
+            if current_alt >= target_alt * 0.95:
+                print(f"✅ Drone {self.id}: 已達目標高度 {current_alt:.2f} m！")
+                break
+
+            # 每 1 秒檢查一次高度
+            time.sleep(1)
+        print(f"Drone {self.id}: 起飛完成")
+
 
     def disarm(self):
         """上鎖馬達"""
@@ -84,17 +127,6 @@ class Drone:
     # ----------------------------------------------------------
     # 飛行控制
     # ----------------------------------------------------------
-    def takeoff(self, altitude):
-        """起飛到指定高度（公尺）"""
-        if not self.link:
-            return
-        print(f"🚁 起飛至 {altitude} 公尺...")
-        self.link.mav.command_long_send(
-            self.link.target_system,
-            self.link.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            0, 0, 0, 0, 0, 0, 0, altitude
-        )
 
     def rtl(self):
         if not self.connection:
@@ -123,25 +155,24 @@ class Drone:
     # 狀態讀取
     # ----------------------------------------------------------
     def get_state(self):
-        """取得即時狀態"""
-        if not self.connection:
+        """
+        取得 Drone 狀態，回傳字典
+        """
+        if not hasattr(self, "vehicle") or self.vehicle is None:
             return None
-        try:
-            msg = self.connection.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
-            hb = self.connection.recv_match(type='HEARTBEAT', blocking=False)
-            if not msg:
-                return None
-            return {
-                "lat": msg.lat / 1e7,
-                "lon": msg.lon / 1e7,
-                "alt": msg.relative_alt / 1000.0,
-                "yaw": getattr(msg, "hdg", 0) / 100.0,
-                "mode": mavutil.mode_string_v10(hb) if hb else "UNKNOWN",
-                "armed": bool(getattr(hb, "base_mode", 0) & 0b10000000)
-            }
-        except Exception as e:
-            print(f"⚠️ 無法取得狀態: {e}")
-            return None
+
+        v = self.vehicle
+        state = {
+            "lat": v.location.global_relative_frame.lat,
+            "lon": v.location.global_relative_frame.lon,
+            "alt": v.location.global_relative_frame.alt,
+            "speed": v.airspeed if v.airspeed else 0,
+            "yaw": v.heading if hasattr(v, "heading") else 0,
+            "mode": v.mode.name if v.mode else "UNKNOWN",
+            "armed": v.armed if hasattr(v, "armed") else False
+        }
+
+        return state
 
     # ----------------------------------------------------------
     # 其他控制

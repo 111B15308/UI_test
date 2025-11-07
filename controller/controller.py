@@ -1,10 +1,13 @@
 import json
+import dronekit
+import threading
 from PyQt5.QtCore import QObject
 from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from view.settings_dialog import SettingsDialog
 from view.drone_config_dialog import DroneConfigDialog
+from view.view import MapView
 from controller.mission_api import mission_api
-from dronekit import connect
+from dronekit import connect, VehicleMode, LocationGlobalRelative
 from drone.drone import Drone
 import time
 
@@ -13,21 +16,25 @@ class MapController(QObject):
         super().__init__()
         self.model = model
         self.view = view
+        
+        self.map_loaded = False  # 新增 flag，預設 False，等 WebView 載入完成後觸發
         self.drones = []
+        self.current_wp_index = 0
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.refresh_status)
+        self.timer.timeout.connect(self.update_all_states)
+        self.timer.start(1000)  # 每 1000ms 更新一次
 
         # connect UI buttons (top_bar 隱藏但按鈕物件存在)
-        try:
-            self.view.add_btn.clicked.connect(self.on_add_marker_clicked)
-            self.view.center_btn.clicked.connect(self.on_center_clicked)
-            self.view.clear_btn.clicked.connect(self.on_clear_markers)
 
-            # 新增：緊急停止 / 返回Home
-            self.view.stop_btn.clicked.connect(self.on_emergency_stop)
-            self.view.rtl_btn.clicked.connect(self.on_rtl)
-            self.view.start_btn.clicked.connect(self.on_start_mission)
-        except Exception:
-            # 如果 top_bar 被完全移除，這裡會發生例外，我們安全忽略
-            pass
+        #self.view.add_btn.clicked.connect(self.on_add_marker_clicked)
+        #self.view.center_btn.clicked.connect(self.on_center_clicked)
+        self.view.arm_takeoff_btn.clicked.connect(self._on_arm_and_takeoff_all)
+        self.view.fly_btn.clicked.connect(self._on_fly_to_next_wp)
+        self.view.seq_btn.clicked.connect(self._on_fly_sequence)
+        self.view.clear_btn.clicked.connect(self.on_clear_markers)
+        self.view.stop_btn.clicked.connect(self.on_emergency_stop)
+        self.view.rtl_btn.clicked.connect(self.on_rtl)
 
         # connect from JS (右鍵航點) -> Bridge slot emits waypointAdded signal
         self.view.bridge.waypointAdded.connect(self.on_waypoint_added)
@@ -38,26 +45,28 @@ class MapController(QObject):
         mission_api.start_position_watcher(self.on_drone_states_update)
 
     def sync_model_to_view(self, reset_center=False):
-        """把 model 同步到 view (JS)"""
         c = self.model.center
         z = self.model.zoom
-
-        # set center and clear markers
         if reset_center:
             self.view.run_js(f"setCenter({c['lat']}, {c['lng']}, {z});")
         self.view.run_js("clearMarkers();")
-
         coords = []
         for m in self.model.markers:
             label = (m.get("label") or "").replace("'", "\\'")
-            js = f"addMarker('{m['id']}', {m['lat']}, {m['lng']}, '{label}');"
-            self.view.run_js(js)
+            self.view.run_js(f"addMarker('{m['id']}', {m['lat']}, {m['lng']}, '{label}');")
             coords.append([m['lat'], m['lng']])
-
         if len(coords) > 1:
-            coord_js = json.dumps(coords)
-            self.view.run_js(f"drawPath({coord_js});")
+            self.view.run_js(f"drawPath({json.dumps(coords)});")
     
+    def on_map_loaded(self, ok):
+        if ok:
+            print("✅ 地圖載入完成")
+            self.map_loaded = True
+            # 地圖載入完成後，再同步 model 航點到 view
+            self.sync_model_to_view(reset_center=True)
+        else:
+            print("❌ 地圖載入失敗")
+
     def on_connect_clicked(self, drone_count):
         """使用者點擊「連線」後的邏輯"""
         # 一一設定每台無人機
@@ -90,21 +99,40 @@ class MapController(QObject):
                     try:
                         drone = Drone(i + 1, connection_str, alt, speed)
                         drone.connected = True
-                        self.drones.append(drone)
                     except Exception as e:
                         drone.connected = False
                         print(f"❌ vehicle{i+1} 重新連線失敗：{e}")
             else:
                 drone = Drone(i + 1, connection_str, alt, speed)
-                vehicle = drone.vehicle
                 self.drones.append(drone)
         self.drones.sort(key=lambda drone: drone.id)
         success_count = sum(1 for d in self.drones if d.connected)
+        self.model.drones = self.drones
         print(f"📡 成功連線 {success_count}/{drone_count} 台無人機")
 
         
 
-          
+    def refresh_status(self):
+        self.view.update_status_panels(self.model.drones)    
+
+    def update_all_states(self):
+        """定期更新所有無人機狀態到地圖"""
+        if not getattr(self, "map_loaded", False):
+            return
+        states = {}
+        for drone in self.model.drones:
+            s = drone.get_state()
+            if s:
+                states[drone.id] = {
+                    "lat": s["lat"],
+                    "lon": s["lon"],
+                    "alt": s["alt"],
+                    "speed": s["speed"],
+                    "yaw": s["yaw"],
+                    "mode": s["mode"]
+                }
+        if states:
+            self.view.run_js(f"updateAllDrones(`{json.dumps(states)}`);")
 
     def on_add_marker_clicked(self):
         try:
@@ -132,14 +160,78 @@ class MapController(QObject):
         self.model.clear_markers()
 
     def on_waypoint_added(self, lat, lng):
-        """由地圖右鍵新增航點時呼叫（Bridge.emit -> 這裡接收）"""
+        if lat is None or lng is None:
+            print("❌ 無效航點")
+            return
         marker = {
             "id": f"m{len(self.model.markers)+1}",
-            "lat": lat, "lng": lng,
+            "lat": float(lat),
+            "lng": float(lng),
             "label": f"第{len(self.model.markers)+1}航點"
         }
         self.model.add_marker(marker)
         self.sync_model_to_view()
+
+    def _on_fly_to_next_wp(self):
+        """讓 Drone1 飛往下一個航點"""
+        if not hasattr(self, "current_wp_index"):
+            self.current_wp_index = 0  # ✅ 初始化航點索引
+
+        if not self.model.markers:
+            print("❌ 尚未設定航點")
+            return
+        if not self.drones:
+            print("❌ 尚未連線任何無人機")
+            return
+
+        if self.current_wp_index >= len(self.model.markers):
+            print("✅ 已抵達最後一個航點")
+            return
+
+        wp = self.model.markers[self.current_wp_index]
+        lat, lon = wp["lat"], wp["lng"]
+
+        drone = self.drones[0]  # ✅ 目前只控制第1台
+        vehicle = drone.vehicle
+        alt = vehicle.location.global_relative_frame.alt  # 使用目前高度
+
+        print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
+
+        try:
+            # 若不是 GUIDED 模式就切換
+            if vehicle.mode.name != "GUIDED":
+                vehicle.mode = VehicleMode("GUIDED")
+                time.sleep(1)
+
+            # ✅ 送出飛行指令
+            vehicle.simple_goto(LocationGlobalRelative(lat, lon, alt))
+            self.current_wp_index += 1  # ✅ 移到下一個航點
+
+        except Exception as e:
+            print(f"⚠️ 飛行指令失敗: {e}")
+    
+    def _on_arm_and_takeoff_all(self):
+        """所有已連線的無人機進入GUIDED並起飛到設定高度"""
+        if not self.drones:
+            print("❌ 尚未連線任何無人機")
+            return
+ 
+        print("🟡 所有無人機準備解鎖並起飛...")
+
+        for drone in self.drones:       
+            if not drone.connected:
+                print(f"⛔ Drone {drone.id} 未連線，略過起飛。")
+                continue
+            try:
+                print(f"🚁 Drone {drone.id} 起飛中...")
+                drone.set_guided_and_arm()
+                # ✅ 使用背景執行緒執行起飛（避免 UI 卡死）
+                thread = threading.Thread(target=drone.takeoff, args=(drone.alt,))
+                thread.start()
+            except Exception as e:
+                print(f"⚠️ Drone {drone.id} 起飛失敗: {e}")
+
+        print("✅ 所有無人機已起飛完成")
 
     # === 新增：控制按鈕事件 ===
     def on_emergency_stop(self):
@@ -160,36 +252,51 @@ class MapController(QObject):
         except Exception as e:
             print("on_apply_settings error:", e)
 
-    def on_start_mission(self):
-        """由 UI 的 '開始任務' 按鈕觸發"""
-        # collect waypoints from model.markers (順序為加入順序)
-        coords = []
-        for m in self.model.markers:
-            # marker 可能只有 lat/lng
-            lat = m.get("lat")
-            lng = m.get("lng")
-            # 你可以提供 alt 若 UI 有該欄位；這裡不強制 alt
-            coords.append((lat, lng))
-        if not coords:
-            print("尚未設定航點 (markers 為空)。")
+    def _on_fly_sequence(self):
+        """Drone1 依序飛往剩下的航點（背景執行緒）"""
+        if not self.drones or not self.model.markers:
+            print("❌ 尚未連線或未設定航點")
             return
-        # apply settings from model to mission_api
-        mission_api.set_params(self.model.drone_count, self.model.formation)
-        try:
-            started = mission_api.start_mission(coords)
-            if started:
-                print("任務已啟動 (background thread)。")
-        except Exception as e:
-            print("啟動任務失敗：", e)
-    
+        
+        def sequence_thread():
+            drone = self.drones[0]  # 目前只控制 Drone1
+            vehicle = drone.vehicle
+
+            while self.current_wp_index < len(self.model.markers):
+                wp = self.model.markers[self.current_wp_index]
+                lat, lon = wp["lat"], wp["lng"]
+                alt = vehicle.location.global_relative_frame.alt
+                print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
+
+                # 確保 GUIDED 模式
+                if vehicle.mode.name != "GUIDED":
+                    vehicle.mode = VehicleMode("GUIDED")
+                    time.sleep(1)
+
+                vehicle.simple_goto(LocationGlobalRelative(lat, lon, alt))
+
+                # 等待到達航點
+                while True:
+                    current = vehicle.location.global_relative_frame
+                    dist = ((current.lat - lat)**2 + (current.lon - lon)**2)**0.5 * 1e5
+                    if dist < 1.0:
+                        break
+                    time.sleep(1)
+
+                print(f"✅ Drone1 抵達第 {self.current_wp_index + 1} 個航點")
+                self.current_wp_index += 1
+
+            print("✅ Drone1 已飛完所有剩下航點")
+
+        # 啟動背景執行緒
+        threading.Thread(target=sequence_thread, daemon=True).start()
+
     def on_drone_states_update(self, states):
         """接收 mission_api 回報的無人機狀態，轉給 view 更新地圖"""
-        # states 是個 dict，例如：
-        # {1: {'lat':22.9, 'lon':120.27, 'yaw':90.2}, 2: {...}, ...}
-        try:
-            self.view.update_drone_positions(states)
-        except Exception as e:
-            print(f"⚠️ 更新地圖時發生錯誤: {e}")
+        if not getattr(self, "map_loaded", False):
+            return  # JS 還沒準備好
+        json_str = json.dumps(states)
+        self.view.run_js(f"updateAllDrones(`{json_str}`);")
     
 class SettingsController:
     def __init__(self, model):

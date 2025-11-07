@@ -1,9 +1,11 @@
 import os
+import json
 from PyQt5 import QtWidgets, QtWebEngineWidgets, QtCore
 from PyQt5.QtCore import Qt, QUrl, QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QPushButton
 )
+from PyQt5.QtCore import pyqtSlot
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtWidgets import QComboBox, QLabel
@@ -11,6 +13,11 @@ from PyQt5.QtWidgets import QComboBox, QLabel
 
 class Bridge(QObject):
     waypointAdded = pyqtSignal(float, float)  # 傳航點座標到 Python
+
+    @pyqtSlot(float, float)
+    def addWaypoint(self, lat, lng):
+        # 觸發 signal
+        self.waypointAdded.emit(lat, lng)
 
 
 class MapView(QMainWindow):
@@ -46,7 +53,6 @@ class MapView(QMainWindow):
 
         # 綁定按鈕
         self.clear_btn.clicked.connect(self._on_clear_markers)
-        self.fly_btn.clicked.connect(self._on_fly_to_wp1)
         self.seq_btn.clicked.connect(self._on_fly_sequential)
         
         self.connect_bar = QtWidgets.QHBoxLayout()
@@ -99,29 +105,33 @@ class MapView(QMainWindow):
         v.setSpacing(10)
         self.top_bar.setLayout(v)
     
-        # --- 原有按鈕 ---
-        clear_btn = QPushButton("清除航點")
-        clear_btn.setFixedSize(150, 40)
-        fly_btn = QPushButton("飛向第1航點")
+        # --- 原有按鈕 ---        
+        arm_takeoff_btn = QPushButton("解鎖並起飛")
+        arm_takeoff_btn.setFixedSize(150, 40)
+        fly_btn = QPushButton("飛向下一個航點")
         fly_btn.setFixedSize(150, 40)
         seq_btn = QPushButton("依序飛到所有航點")
         seq_btn.setFixedSize(150, 40)
+        clear_btn = QPushButton("清除航點")
+        clear_btn.setFixedSize(150, 40)
         stop_btn = QPushButton("緊急停止")
         stop_btn.setFixedSize(150, 40)
         rtl_btn = QPushButton("返回Home")
         rtl_btn.setFixedSize(150, 40)
 
-        v.addWidget(clear_btn)
+        v.addWidget(arm_takeoff_btn)
         v.addWidget(fly_btn)
         v.addWidget(seq_btn)
+        v.addWidget(clear_btn)
         v.addWidget(stop_btn)
         v.addWidget(rtl_btn)
 
 
         # --- 保存引用以便在 controller 綁定 ---
-        self.clear_btn = clear_btn
+        self.arm_takeoff_btn = arm_takeoff_btn
         self.fly_btn = fly_btn
         self.seq_btn = seq_btn
+        self.clear_btn = clear_btn
         self.stop_btn = stop_btn
         self.rtl_btn = rtl_btn
 
@@ -147,7 +157,7 @@ class MapView(QMainWindow):
             layout = QtWidgets.QVBoxLayout(panel)
             layout.setContentsMargins(8, 8, 8, 8)
             layout.setSpacing(5)
-
+            
             label_name = QtWidgets.QLabel(f" Drone {i+1}")
             label_speed = QtWidgets.QLabel(" 速度: 0 m/s")
             label_alt = QtWidgets.QLabel(" 高度: 0 m")
@@ -174,25 +184,22 @@ class MapView(QMainWindow):
 
             y_offset += 130  # panel 高度 + 間距
 
-    def update_status(self, drone_states):
+    def update_status_panels(self, drones):
         """
-        動態更新每台無人機的狀態
-        drone_states: list of dict
-        例如:
-        [
-            {"speed": 5, "alt": 15, "mode": "GUIDED", "yaw": 90},
-            {"speed": 4, "alt": 16, "mode": "GUIDED", "yaw": 45},
-        ]
+        根據 drones 列表更新左側狀態面板
+        drones: list of Drone 物件
         """
-        for i, state in enumerate(drone_states):
+        for i, drone in enumerate(drones):
             if i >= len(self.status_panels):
-                break
+                continue
             panel_info = self.status_panels[i]
-            panel_info["speed"].setText(f"速度: {state.get('speed',0)} m/s")
-            panel_info["alt"].setText(f"高度: {state.get('alt',0)} m")
-            panel_info["mode"].setText(f"模式: {state.get('mode','N/A')}")
-            panel_info["yaw"].setText(f"頭朝向: {state.get('yaw',0)}°")  
-
+            state = drone.get_state()
+            if state:
+                panel_info["speed"].setText(f"速度: {state.get('speed', 0):.1f} m/s")
+                panel_info["alt"].setText(f"高度: {state.get('alt', 0):.1f} m")
+                panel_info["mode"].setText(f"模式: {state.get('mode', 'N/A')}")
+                panel_info["yaw"].setText(f"頭朝向: {state.get('yaw', 0):.1f}°")
+                
     def _load_map_html(self, drone_count):
         drone_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "picture", "drone.png"))
         drone_url = QUrl.fromLocalFile(drone_path).toString()
@@ -249,17 +256,18 @@ class MapView(QMainWindow):
                     iconAnchor: [24, 24],
                     popupAnchor: [0, -24]
                 }});
-                
-                var droneMarkers = {{}}; 
+
+                var droneMarkers = {{}};
                 var droneMarker = L.marker([22.9048880, 120.2719823], {{
                     icon: droneIcon,
                     rotationAngle: 0,
                     rotationOrigin: "center center"
                 }}).addTo(map);
                 droneMarker.bindPopup("無人機位置");
+
                 // 初始化多台無人機
                 for (var i = 0; i < droneCount; i++) {{
-                    var lat = 22.9048880 + i*0.0001;  // 位置偏移避免疊在一起
+                    var lat = 22.9048880 + i*0.0001;
                     var lng = 120.2719823;
                     droneMarkers[i] = L.marker([lat, lng], {{
                         icon: droneIcon,
@@ -274,7 +282,17 @@ class MapView(QMainWindow):
                     m.bindPopup("Drone " + id);
                     droneMarkers[id] = m;
                 }}
-                
+
+                function setCenter(lat, lng, zoom) {{
+                    map.setView([lat, lng], zoom);
+                }}
+
+                function drawPath(coords) {{
+                    if (!coords || coords.length < 2) return;
+                    var latlngs = coords.map(c => [c[0], c[1]]);
+                    L.polyline(latlngs, {{color: 'red'}}).addTo(map);
+                }}
+
                 function updateDroneMarker(id, lat, lng) {{
                     if (!window.droneMarkers) window.droneMarkers = {{}};
                     if (!window.droneMarkers[id]) {{
@@ -283,10 +301,14 @@ class MapView(QMainWindow):
                         window.droneMarkers[id].setLatLng([lat, lng]);
                     }}
                 }}
-                function addMarker(lat, lng) {{
-                    var n = markers.length + 1;
+
+                function addMarker(id, lat, lng, label) {{
+                    if (lat === undefined || lng === undefined) {{
+                        console.error("Invalid LatLng for marker", id, lat, lng);
+                        return;
+                    }}
                     var m = L.marker([lat, lng]).addTo(map);
-                    m.bindPopup("第 " + n + " 航點<br>Lat: " + lat.toFixed(6) + "<br>Lng: " + lng.toFixed(6));
+                    m.bindPopup(label || ("航點 " + id));
                     markers.push(m);
 
                     if(markers.length > 1){{
@@ -314,7 +336,6 @@ class MapView(QMainWindow):
                     document.getElementById("popup").style.display = "none";
                 }}
 
-                // 飛向第1航點
                 function flyToFirstWaypoint() {{
                     if(markers.length === 0) {{
                         showPopup();
@@ -323,7 +344,6 @@ class MapView(QMainWindow):
                     flyToTarget(markers[0].getLatLng());
                 }}
 
-                // 通用飛行函數
                 function flyToTarget(wp, callback) {{
                     var current = droneMarker.getLatLng();
                     var dx = wp.lng - current.lng;
@@ -346,7 +366,6 @@ class MapView(QMainWindow):
                     }}, 50);
                 }}
 
-                // 依序飛到所有航點
                 function flySequentialWaypoints() {{
                     if(markers.length === 0) {{
                         showPopup();
@@ -362,16 +381,17 @@ class MapView(QMainWindow):
                     next();
                 }}
 
-                // 右鍵點擊新增航點
                 new QWebChannel(qt.webChannelTransport, function(channel) {{
                     window.qtbridge = channel.objects.qtbridge;
-                }});
 
-                map.on('contextmenu', function(e) {{
-                    addMarker(e.latlng.lat, e.latlng.lng);
-                    if(window.qtbridge) {{
-                        window.qtbridge.waypointAdded(e.latlng.lat, e.latlng.lng);
-                    }}
+                    map.on('contextmenu', function(e){{
+                        if(e.latlng && e.latlng.lat && e.latlng.lng){{
+                            addMarker('m' + (markers.length+1), e.latlng.lat, e.latlng.lng, "航點 " + (markers.length+1));
+                            window.qtbridge.addWaypoint(e.latlng.lat, e.latlng.lng);
+                        }} else {{
+                            console.error("Invalid right-click location", e.latlng);
+                        }}
+                    }});
                 }});
 
                 function updateAllDrones(states_json) {{
@@ -383,7 +403,6 @@ class MapView(QMainWindow):
                             var lon = s.lon;
                             var yaw = s.yaw || 0;
 
-                            // 若地圖上沒這台無人機，就新增一個 marker
                             if (!droneMarkers[id]) {{
                                 droneMarkers[id] = L.marker([lat, lon], {{
                                     icon: droneIcon,
@@ -392,7 +411,6 @@ class MapView(QMainWindow):
                                 }}).addTo(map);
                                 droneMarkers[id].bindPopup("Drone " + id);
                             }} else {{
-                                // 更新位置與角度
                                 droneMarkers[id].setLatLng([lat, lon]);
                                 droneMarkers[id].setRotationAngle(yaw);
                             }}
@@ -400,12 +418,15 @@ class MapView(QMainWindow):
                     }} catch (e) {{
                         console.error("⚠️ 更新無人機圖標失敗:", e);
                     }}
-                }}                                 
+                }}
             </script>
         </body>
         </html>
+
+
         """
-        self.webview.setHtml(html, baseUrl=QUrl.fromLocalFile(os.path.dirname(drone_path) + "/"))
+        self.webview.setHtml(html, baseUrl=QUrl.fromLocalFile(os.path.dirname(__file__) + "/"))
+
 
     def run_js(self, js_code, callback=None):
         if callback:
@@ -417,8 +438,12 @@ class MapView(QMainWindow):
         self.model.clear_markers()
         self.run_js("clearMarkers();")
 
-    def _on_fly_to_wp1(self):
+    def _on_fly_to_next_wp(self):
         self.run_js("flyToFirstWaypoint();")
 
     def _on_fly_sequential(self):
         self.run_js("flySequentialWaypoints();")
+
+    def _on_arm_and_takeoff_all(self):
+        """按鈕：解鎖並起飛"""
+        pass
