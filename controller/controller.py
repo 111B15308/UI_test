@@ -9,6 +9,7 @@ from view.view import MapView
 from controller.mission_api import mission_api
 from dronekit import connect, VehicleMode, LocationGlobalRelative
 from drone.drone import Drone
+from geopy.distance import geodesic
 import time
 
 class MapController(QObject):
@@ -20,6 +21,8 @@ class MapController(QObject):
         self.map_loaded = False  # 新增 flag，預設 False，等 WebView 載入完成後觸發
         self.drones = []
         self.current_wp_index = 0
+        self.sequence_flying = False # ✅ 新增一個旗標，用於防止重複啟動循序飛行任務
+        self.stop_sequence_flag = False # ✅ 用於從外部停止循序飛行執行緒
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.refresh_status)
         self.timer.timeout.connect(self.update_all_states)
@@ -40,7 +43,7 @@ class MapController(QObject):
         self.view.bridge.waypointAdded.connect(self.on_waypoint_added)
 
         # IMPORTANT: 等 WebView 載入完成後再 sync（避免 setCenter 等函式尚未定義）
-        self.view.webview.page().loadFinished.connect(self.sync_model_to_view)
+        self.view.webview.page().loadFinished.connect(self.on_map_loaded)
         self.view.connect_btn.clicked.connect(lambda: self.on_connect_clicked(drone_count))
         mission_api.start_position_watcher(self.on_drone_states_update)
 
@@ -105,11 +108,16 @@ class MapController(QObject):
             else:
                 drone = Drone(i + 1, connection_str, alt, speed)
                 self.drones.append(drone)
+            # ✅ 設定 RTL 時機頭朝向航點
+            if drone.connected:
+                drone.set_parameter('WP_YAW_BEHAVIOR', 1)
         self.drones.sort(key=lambda drone: drone.id)
         success_count = sum(1 for d in self.drones if d.connected)
         self.model.drones = self.drones
         print(f"📡 成功連線 {success_count}/{drone_count} 台無人機")
 
+        # ✅ 將連線後的 drones 列表傳給 mission_api
+        mission_api.drones = self.drones
         
 
     def refresh_status(self):
@@ -132,8 +140,8 @@ class MapController(QObject):
                     "mode": s["mode"]
                 }
         if states:
-            self.view.run_js(f"updateAllDrones(`{json.dumps(states)}`);")
-
+            self.view.update_drone_positions(states)
+                
     def on_add_marker_clicked(self):
         try:
             lat = float(self.view.lat_input.text())
@@ -157,7 +165,10 @@ class MapController(QObject):
         self.model.center = {"lat": lat, "lng": lng}
 
     def on_clear_markers(self):
+        """清除模型中的航點，並呼叫 JS 清除地圖上的圖示和線條"""
         self.model.clear_markers()
+        self.view.run_js("clearMarkers();")  # ✅ 呼叫 JS 清除圖示和紅線
+        self.current_wp_index = 0  # ✅ 將航點索引重設為 0
 
     def on_waypoint_added(self, lat, lng):
         if lat is None or lng is None:
@@ -191,21 +202,48 @@ class MapController(QObject):
         wp = self.model.markers[self.current_wp_index]
         lat, lon = wp["lat"], wp["lng"]
 
-        drone = self.drones[0]  # ✅ 目前只控制第1台
-        vehicle = drone.vehicle
-        alt = vehicle.location.global_relative_frame.alt  # 使用目前高度
-
-        print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
-
         try:
+            drone = self.drones[0]
+            # ✅ 1. 在飛行前檢查是否已解鎖
+            if not drone.get_state().get("armed"):
+                self.view.show_warning("無人機還未解鎖!")
+                return
+
+            vehicle = drone.vehicle
+            alt = vehicle.location.global_relative_frame.alt
+            print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
+
             # 若不是 GUIDED 模式就切換
             if vehicle.mode.name != "GUIDED":
                 vehicle.mode = VehicleMode("GUIDED")
                 time.sleep(1)
 
+            # ✅ 2. 記錄飛行前的位置
+            start_pos = vehicle.location.global_relative_frame
+
+            # ✅ 設定機頭朝向目標點
+            # WP_YAW_BEHAVIOR=1: FACE NEXT WAYPOINT
+            if vehicle.parameters['WP_YAW_BEHAVIOR'] != 1:
+                vehicle.parameters['WP_YAW_BEHAVIOR'] = 1
+
             # ✅ 送出飛行指令
             vehicle.simple_goto(LocationGlobalRelative(lat, lon, alt))
-            self.current_wp_index += 1  # ✅ 移到下一個航點
+
+            # ✅ 3. 延遲一小段時間後，檢查無人機是否移動
+            time.sleep(2) # 等待 2 秒讓無人機有時間反應
+            current_pos = vehicle.location.global_relative_frame
+            distance_moved = geodesic(
+                (start_pos.lat, start_pos.lon),
+                (current_pos.lat, current_pos.lon)
+            ).meters
+
+            # ✅ 4. 判斷是否成功飛行
+            if distance_moved < 0.5: # 如果移動距離小於 0.5 公尺，視為未成功飛行
+                print("⚠️ 未成功飛行，目標航點將保持不變。")
+                # 因為沒有成功飛行，所以不增加 current_wp_index
+            else:
+                print("✅ 飛行指令已成功執行，無人機移動中。")
+                self.current_wp_index += 1  # 成功飛行，移到下一個航點
 
         except Exception as e:
             print(f"⚠️ 飛行指令失敗: {e}")
@@ -236,6 +274,8 @@ class MapController(QObject):
     # === 新增：控制按鈕事件 ===
     def on_emergency_stop(self):
         print("⚠️ 按下緊急停止")
+        self.stop_sequence_flag = True # ✅ 設定停止旗標，通知背景執行緒終止
+        # 這裡不重設 self.current_wp_index，以便下次可以從同一個航點繼續
         mission_api.emergency_stop()
 
     def on_rtl(self):
@@ -258,35 +298,71 @@ class MapController(QObject):
             print("❌ 尚未連線或未設定航點")
             return
         
+        # ✅ 檢查是否已有循序飛行任務在執行
+        if self.sequence_flying:
+            print("⚠️ 循序飛行任務已在執行中，請勿重複點擊。")
+            return
+        self.sequence_flying = True # ✅ 上鎖
+        self.stop_sequence_flag = False # ✅ 重設停止旗標
+
+        # ✅ 增加未解鎖警告
+        drone = self.drones[0]
+        if not drone.get_state().get("armed"):
+            self.view.show_warning("無人機還未解鎖!")
+            return
+
         def sequence_thread():
             drone = self.drones[0]  # 目前只控制 Drone1
             vehicle = drone.vehicle
 
-            while self.current_wp_index < len(self.model.markers):
-                wp = self.model.markers[self.current_wp_index]
-                lat, lon = wp["lat"], wp["lng"]
-                alt = vehicle.location.global_relative_frame.alt
-                print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
-
-                # 確保 GUIDED 模式
-                if vehicle.mode.name != "GUIDED":
-                    vehicle.mode = VehicleMode("GUIDED")
-                    time.sleep(1)
-
-                vehicle.simple_goto(LocationGlobalRelative(lat, lon, alt))
-
-                # 等待到達航點
-                while True:
-                    current = vehicle.location.global_relative_frame
-                    dist = ((current.lat - lat)**2 + (current.lon - lon)**2)**0.5 * 1e5
-                    if dist < 1.0:
+            try:
+                while self.current_wp_index < len(self.model.markers):
+                    # ✅ 在每個迴圈開始時檢查停止旗標
+                    if self.stop_sequence_flag:
+                        print("🛑 循序飛行任務被手動終止。")
                         break
-                    time.sleep(1)
 
-                print(f"✅ Drone1 抵達第 {self.current_wp_index + 1} 個航點")
-                self.current_wp_index += 1
+                    wp = self.model.markers[self.current_wp_index]
+                    lat, lon = wp["lat"], wp["lng"]
+                    alt = vehicle.location.global_relative_frame.alt
+                    print(f"🛫 Drone1 飛往第 {self.current_wp_index + 1} 個航點: ({lat}, {lon}, {alt})")
 
-            print("✅ Drone1 已飛完所有剩下航點")
+                    # 確保 GUIDED 模式
+                    if vehicle.mode.name != "GUIDED":
+                        vehicle.mode = VehicleMode("GUIDED")
+                        time.sleep(1)
+
+                    # 增加飛行確認機制
+                    start_pos = vehicle.location.global_relative_frame
+                    vehicle.simple_goto(LocationGlobalRelative(lat, lon, alt))
+                    time.sleep(2) # 等待反應
+                    current_pos = vehicle.location.global_relative_frame
+                    distance_moved = geodesic((start_pos.lat, start_pos.lon), (current_pos.lat, current_pos.lon)).meters
+
+                    if distance_moved < 0.5:
+                        print(f"⚠️ Drone1 未能成功飛往第 {self.current_wp_index + 1} 個航點，任務終止。")
+                        break
+
+                    # 等待到達航點
+                    while True:
+                        # ✅ 在等待時也檢查停止旗標
+                        if self.stop_sequence_flag:
+                            break
+                        current = vehicle.location.global_relative_frame
+                        dist_to_target = geodesic((current.lat, current.lon), (lat, lon)).meters
+                        if dist_to_target < 1.0: # 到達半徑 1 公尺內
+                            break
+                        time.sleep(1)
+
+                    if self.stop_sequence_flag: continue # 如果是手動停止，直接跳到 while 迴圈的開頭進行最終檢查
+
+                    print(f"✅ Drone1 抵達第 {self.current_wp_index + 1} 個航點")
+                    self.current_wp_index += 1
+
+                print("✅ Drone1 已完成或終止循序飛行任務")
+            finally:
+                # ✅ 使用 finally 確保任務無論如何結束，都會解鎖
+                self.sequence_flying = False
 
         # 啟動背景執行緒
         threading.Thread(target=sequence_thread, daemon=True).start()
@@ -295,8 +371,7 @@ class MapController(QObject):
         """接收 mission_api 回報的無人機狀態，轉給 view 更新地圖"""
         if not getattr(self, "map_loaded", False):
             return  # JS 還沒準備好
-        json_str = json.dumps(states)
-        self.view.run_js(f"updateAllDrones(`{json_str}`);")
+        self.view.update_drone_positions(states)
     
 class SettingsController:
     def __init__(self, model):

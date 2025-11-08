@@ -64,19 +64,21 @@ class MissionAPI:
     # -------------------------------
     def emergency_stop(self):
         """緊急停止所有無人機"""
-        if not self._formation:
-            print("⚠️ 尚未初始化 FormationFlying")
+        if not self.drones:
+            print("⚠️ 尚未連線任何無人機")
             return
-        print(" 緊急停止所有無人機")
-        self._formation.set_brake_mode_all()
+        print("🚁 緊急停止所有無人機 (原地懸停)")
+        for drone in self.drones:
+            drone.hold_position()
 
     def return_to_launch(self):
         """所有無人機返航"""
-        if not self._formation:
-            print("⚠️ 尚未初始化 FormationFlying")
+        if not self.drones:
+            print("⚠️ 尚未連線任何無人機")
             return
-        print("無人機返航中...")
-        self._formation.rtl_all()
+        print("🔙 所有無人機返航中 (切換至 RTL 模式)...")
+        for drone in self.drones:
+            drone.rtl()
 
     # -------------------------------
     # 狀態監控（每秒回報）

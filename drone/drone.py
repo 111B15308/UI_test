@@ -32,28 +32,17 @@ class Drone:
             self.vehicle = None
             print(f"❌ vehicle{drone_id} 連線失敗：{e}")
 
+    def set_parameter(self, param_name, value):
+        """設定無人機參數"""
+        if self.connected and self.vehicle:
+            print(f"Drone {self.id}: 設定參數 {param_name} -> {value}")
+            self.vehicle.parameters[param_name] = value
+        else:
+            print(f"Drone {self.id}: 未連線，無法設定參數")
+
     # ----------------------------------------------------------
     # 模式控制
     # ----------------------------------------------------------
-    def set_mode(self, mode_name="GUIDED"):
-        if not self.link:
-            print("⚠️ 尚未連線無人機")
-            return
-        mode_map = {
-            "GUIDED": 4,
-            "LOITER": 5,
-            "RTL": 6,
-            "LAND": 9,
-            "BRAKE": 17,
-        }
-        mode_id = mode_map.get(mode_name.upper(), 4)
-        self.link.mav.set_mode_send(
-            self.link.target_system,
-            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            mode_id
-        )
-        print(f"🧭 切換模式為: {mode_name}")
-
     def set_guided_and_arm(self):
         """
         設定為 GUIDED 模式並解鎖
@@ -111,44 +100,55 @@ class Drone:
             time.sleep(1)
         print(f"Drone {self.id}: 起飛完成")
 
+    def set_loiter_mode(self):
+        """切換到 LOITER (懸停) 模式"""
+        if not self.connected or self.vehicle is None:
+            print(f"⚠️ Drone {self.id}: 尚未連線，無法切換模式")
+            return
+        if self.vehicle.mode.name != "LOITER":
+            self.vehicle.mode = VehicleMode("LOITER")
+            print(f"🚁 Drone {self.id}: 已切換至 LOITER 模式 (原地懸停)")
+
+    def hold_position(self):
+        """
+        發送速度為 0 的指令，讓無人機在原地懸停。
+        這是比切換到 LOITER 更直接的懸停方式。
+        """
+        if not self.connected or self.vehicle is None:
+            print(f"⚠️ Drone {self.id}: 尚未連線，無法執行懸停")
+            return
+
+        # ✅ 使用 dronekit 的 message_factory 創建 MAVLink 訊息
+        msg = self.vehicle.message_factory.set_position_target_local_ned_encode(
+            0,       # time_boot_ms (not used)
+            0, 0,    # target_system, target_component (not used)
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED, # frame
+            0b0000111111000111, # type_mask (only speeds enabled)
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) # x, y, z, vx, vy, vz, afx, afy, afz, yaw, yaw_rate
+        self.vehicle.send_mavlink(msg)
+        print(f"🛑 Drone {self.id}: 已發送原地懸停指令 (速度歸零)。")
 
     def disarm(self):
         """上鎖馬達"""
-        if not self.link:
+        if not self.connected or self.vehicle is None:
             return
-        self.link.mav.command_long_send(
-            self.link.target_system,
-            self.link.target_component,
-            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0, 0, 0, 0, 0, 0, 0, 0
-        )
+        self.vehicle.armed = False
         print("🔒 已上鎖馬達")
 
     # ----------------------------------------------------------
-    # 飛行控制
-    # ----------------------------------------------------------
-
     def rtl(self):
-        if not self.connection:
+        """切換到 RTL (返航) 模式"""
+        if not self.connected or self.vehicle is None:
+            print(f"⚠️ Drone {self.id}: 尚未連線，無法返航")
             return
-        print("🔙 返航中...")
-        self.connection.mav.command_long_send(
-            self.connection.target_system,
-            self.connection.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH,
-            0, 0, 0, 0, 0, 0, 0, 0
-        )
+        self.vehicle.mode = VehicleMode("RTL")
+        print(f"🔙 Drone {self.id}: 已切換至 RTL 模式 (返航中...)")
 
     def land(self):
         """降落"""
-        if not self.link:
+        if not self.connected or self.vehicle is None:
             return
-        self.link.mav.command_long_send(
-            self.link.target_system,
-            self.link.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_LAND,
-            0, 0, 0, 0, 0, 0, 0, 0
-        )
+        self.vehicle.mode = VehicleMode("LAND")
         print("🪂 正在降落...")
 
     # ----------------------------------------------------------
@@ -175,41 +175,9 @@ class Drone:
         return state
 
     # ----------------------------------------------------------
-    # 其他控制
-    # ----------------------------------------------------------
-    def condition_yaw(self, heading, relative=False):
-        """設定朝向角"""
-        if not self.link:
-            return
-        is_relative = 1 if relative else 0
-        self.link.mav.command_long_send(
-            self.link.target_system,
-            self.link.target_component,
-            mavutil.mavlink.MAV_CMD_CONDITION_YAW,
-            0,
-            heading, 10, 1, is_relative, 0, 0, 0
-        )
-
-    def send_global_velocity(self, vx, vy, vz):
-        """設定全域速度 (m/s)"""
-        if not self.link:
-            return
-        self.link.mav.set_position_target_global_int_send(
-            0,
-            self.link.target_system,
-            self.link.target_component,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-            0b0000111111000111,  # 僅啟用速度控制
-            0, 0, 0,
-            vx, vy, vz,
-            0, 0, 0,
-            0, 0
-        )
-
-    # ----------------------------------------------------------
     # 關閉連線
     # ----------------------------------------------------------
     def close_conn(self):
-        if self.link:
-            self.link.close()
+        if self.vehicle:
+            self.vehicle.close()
             print("❎ 已關閉無人機連線")
