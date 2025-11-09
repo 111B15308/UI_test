@@ -174,6 +174,47 @@ class Drone:
 
         return state
 
+    def condition_yaw(self, heading, relative=False):
+        """
+        命令無人機轉向至指定的偏航角。
+        Args:
+            heading (float): 目標角度 (0-360)。
+            relative (bool): False 為絕對角度 (北=0)，True 為相對當前機頭的角度。
+        """
+        if not self.connected or self.vehicle is None:
+            print(f"⚠️ Drone {self.id}: 未連線，無法調整偏航角")
+            return
+
+        # 創建 MAV_CMD_CONDITION_YAW 指令
+        msg = self.vehicle.message_factory.command_long_encode(
+            0, 0,    # target system, target component
+            mavutil.mavlink.MAV_CMD_CONDITION_YAW, # command
+            0,       # confirmation
+            heading, # param 1, yaw in degrees
+            0,       # param 2, yaw speed (not used)
+            1 if relative is False else -1, # param 3, direction: 1 for clockwise, -1 for counter-clockwise (absolute uses 1)
+            1 if relative is True else 0,  # param 4, relative offset (1) or absolute angle (0)
+            0, 0, 0) # param 5, 6, 7 not used
+        self.vehicle.send_mavlink(msg)
+
+    def fly_to_point_non_blocking(self, location: LocationGlobalRelative, groundspeed: float):
+        """
+        以非阻塞方式命令無人機飛往指定地點。
+        """
+        if not self.connected or self.vehicle is None:
+            print(f"⚠️ Drone {self.id}: 未連線，無法執行飛行指令")
+            return
+
+        # 確保在 GUIDED 模式
+        if self.vehicle.mode.name != "GUIDED":
+            self.vehicle.mode = VehicleMode("GUIDED")
+            time.sleep(0.5) # 等待模式切換
+
+        self.vehicle.groundspeed = groundspeed
+        self.vehicle.simple_goto(location)
+        # print(f"Drone {self.id}: 前往 {location.lat}, {location.lon}...") # 可選：顯示除錯訊息
+
+
     # ----------------------------------------------------------
     # 關閉連線
     # ----------------------------------------------------------

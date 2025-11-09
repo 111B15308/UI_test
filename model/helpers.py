@@ -79,6 +79,20 @@ def get_bearing(loc1: LocationGlobalRelative, loc2: LocationGlobalRelative) -> f
     
     return bearing_deg
 
+def get_location_from_transposed(transposed_missions: dict, waypoint_id: int) -> LocationGlobalRelative:
+    """
+    從轉置後的航線字典中，獲取指定航點ID的虛擬中心點。
+    我們假設領頭機(通常是ID 1或中心ID)的位置最接近虛擬中心點。
+    """
+    waypoints_at_id = transposed_missions.get(waypoint_id)
+    if not waypoints_at_id:
+        return None
+    
+    # 簡單地返回第一台無人機的目標位置作為虛擬中心點的近似
+    # 在我們的計算邏輯中，這通常是準確的
+    return waypoints_at_id[0]
+
+
 # 從 .waypoints 檔案讀取航點
 def load_waypoints_from_file(filepath: str) -> list[LocationGlobalRelative]:
     """
@@ -152,17 +166,20 @@ def get_location_metres(original_location:LocationGlobalRelative, dNorth, dEast,
 
     return LocationGlobalRelative(newlat, newlon, newalt)
 
-def save_all_drone_missions():
+def save_all_drone_missions(virtual_center_waypoints_objs: list[LocationGlobalRelative] = None):
     """
     儲存所有無人機的航線規劃，每個非起始虛擬航點i要加入2個實際航點， 
     第1個其waypoint_bearing為第i-1個虛擬航點到第i個虛擬航點的方向。
     第2個其waypoint_bearing為第i個虛擬航點到第i+1個虛擬航點的方向。
+    Args:
+        virtual_center_waypoints_objs (list[LocationGlobalRelative], optional): 
+            一個包含虛擬中心航點的列表。如果為 None，則會從 formation_setting.waypoint_file 讀取。
     """
     # 創立儲存所有無人機的航線規劃，字典的key對應無人機編號，內容為虛擬航點的列表
     all_drone_missions = {i: [] for i in range(1, formation_setting.formation_params["num_drones"] + 1)}
 
-    # 將waypoint檔案讀到的航點存入virtual_center_waypoints_objs列表
-    virtual_center_waypoints_objs = load_waypoints_from_file(formation_setting.waypoint_file)
+    if virtual_center_waypoints_objs is None:
+        virtual_center_waypoints_objs = load_waypoints_from_file(formation_setting.waypoint_file)
     if not virtual_center_waypoints_objs:
         print("警告：未能讀取到任何虛擬航點")
         return
@@ -183,12 +200,12 @@ def save_all_drone_missions():
     for i, virtual_waypoint in enumerate(virtual_center_waypoints_objs):#virtual_center_waypoints_objs 由waypoint 檔案中載入的航點
         # 獲取這個航點應該設定的偏航角 (隊形的目標方向)
         # 對於非起始的虛擬航點（即第2到第n個航點），加入一個實際航點
-        if i > 0 :  # 非起始航點
+        if i > 0:  # 非起始航點
             #i-1虛擬航點的bearing，由虛擬航點i-1指向虛擬航點i
             target_yaw_degrees = waypoint_bearings[i - 1]
             # 計算實際航點，偏移會根據前後航點的方向來計算
             target_yaw_radians = math.radians(target_yaw_degrees)
-
+ 
             # 對於每台無人機，計算該點的偏移
             for drone_id in range(1, formation_setting.formation_params["num_drones"] + 1):
                 dx_body, dy_body, dz = formation_setting.drone_offsets_body_frame[drone_id] #
@@ -196,7 +213,7 @@ def save_all_drone_missions():
                 # 根據偏航角旋轉隊形局部偏移量
                 dNorth_rotated = dx_body * math.cos(target_yaw_radians) - dy_body * math.sin(target_yaw_radians)
                 dEast_rotated = dx_body * math.sin(target_yaw_radians) + dy_body * math.cos(target_yaw_radians)
-
+ 
                 # 計算實際航點位置
                 # actual_waypoint_location: LocationGlobalRelative(newlat, newlon, newalt)
                 actual_waypoint_location = get_location_metres(
@@ -205,9 +222,8 @@ def save_all_drone_missions():
                     dEast_rotated,   
                     dz               
                 ) 
-                
                 all_drone_missions[drone_id].append(actual_waypoint_location)
-
+ 
         target_yaw_degrees = waypoint_bearings[i]
         target_yaw_radians = math.radians(target_yaw_degrees) if target_yaw_degrees is not None else None
 
@@ -234,6 +250,40 @@ def save_all_drone_missions():
             all_drone_missions[drone_id].append(actual_waypoint_location)
  
     return all_drone_missions
+
+def calculate_formation_positions_at_waypoint(
+    virtual_waypoint: LocationGlobalRelative, 
+    bearing_degrees: float = None) -> dict[int, LocationGlobalRelative]:
+    """
+    計算圍繞單一虛擬航點的隊形中，所有無人機的絕對GPS位置。
+    Args:
+        virtual_waypoint: 虛擬中心點的 LocationGlobalRelative 物件。
+        bearing_degrees: 隊形的目標朝向 (0-360度)。如果為 None，則不旋轉隊形。
+    Returns:
+        一個字典，key 為 drone_id，value 為對應的 LocationGlobalRelative 位置。
+    """
+    target_positions = {}
+    target_yaw_radians = math.radians(bearing_degrees) if bearing_degrees is not None else None
+
+    # ✅ 修正：必須遍歷所有無人機，從 1 到 N
+    for drone_id in range(1, formation_setting.formation_params["num_drones"] + 1):
+        dx_body, dy_body, dz = formation_setting.drone_offsets_body_frame.get(drone_id, (0, 0, 0))
+
+        if target_yaw_radians is not None:
+            # 根據目標偏航角旋轉隊形局部偏移量
+            # dx_body (向前) -> dNorth, dy_body (向右) -> dEast
+            dNorth_rotated = dx_body * math.cos(target_yaw_radians) - dy_body * math.sin(target_yaw_radians)
+            dEast_rotated = dx_body * math.sin(target_yaw_radians) + dy_body * math.cos(target_yaw_radians)
+        else:
+            # 無特定朝向時，視為朝向正北 (yaw=0)，向前=向北, 向右=向東
+            dNorth_rotated = dx_body
+            dEast_rotated = dy_body
+
+        # 計算實際航點位置
+        actual_location = get_location_metres(virtual_waypoint, dNorth_rotated, dEast_rotated, dz)
+        target_positions[drone_id] = actual_location
+    
+    return target_positions
 
 def plot_mission_waypoints(all_drone_missions):
     """

@@ -80,37 +80,6 @@ class MissionAPI:
         for drone in self.drones:
             drone.rtl()
 
-    # -------------------------------
-    # 狀態監控（每秒回報）
-    # -------------------------------
-    def start_position_watcher(self, callback):
-        """每秒更新一次無人機狀態"""
-        if not self._formation:
-            print("⚠️ 尚未初始化 FormationFlying")
-            return
-
-        def _watch():
-            while True:
-                states = {}
-                try:
-                    for i, link in self._formation.drones.items():
-                        state = link.recv_match(type='GLOBAL_POSITION_INT', blocking=False) 
-                    if state:
-                        states[i] = {
-                            "lat": state.lat / 1e7,
-                            "lon": state.lon / 1e7,
-                            "alt": state.relative_alt / 1000.0
-                        }
-                    if states:  # 至少有一架狀態正常才回傳
-                        callback(states)
-
-                    time.sleep(1)
-                except Exception as e:
-                    print("❌ 位置更新錯誤 (主線程):", e)
-                    break
-
-        threading.Thread(target=_watch, daemon=True).start()
-
 
     # -------------------------------
     # 關閉 SITL

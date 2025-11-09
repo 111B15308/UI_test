@@ -111,32 +111,42 @@ class MapView(QMainWindow):
         v.setSpacing(10)
         self.top_bar.setLayout(v)
     
-        # --- 原有按鈕 ---        
+        # --- 原有按鈕 ---
+        deploy_btn = QPushButton("展開隊型")
+        deploy_btn.setToolTip("讓所有無人機飛到第一個航點就位並對齊姿態")
+        deploy_btn.setFixedSize(150, 40)
         arm_takeoff_btn = QPushButton("解鎖並起飛")
         arm_takeoff_btn.setFixedSize(150, 40)
         fly_btn = QPushButton("飛向下一個航點")
         fly_btn.setFixedSize(150, 40)
         seq_btn = QPushButton("依序飛往航點")
+        seq_btn.setToolTip("單機時依序飛行，多機時執行群飛任務") # ✅ 增加提示文字
         seq_btn.setFixedSize(150, 40)
+        # formation_btn = QPushButton("執行群飛任務") # ❌ 不再需要獨立按鈕
+        # formation_btn.setFixedSize(150, 40)
         clear_btn = QPushButton("清除航點")
         clear_btn.setFixedSize(150, 40)
         stop_btn = QPushButton("緊急停止")
         stop_btn.setFixedSize(150, 40)
         rtl_btn = QPushButton("RTL")
         rtl_btn.setFixedSize(150, 40)
-
+ 
         v.addWidget(arm_takeoff_btn)
+        v.addWidget(deploy_btn)
         v.addWidget(fly_btn)
         v.addWidget(seq_btn)
+        # v.addWidget(formation_btn) # ❌ 不再需要獨立按鈕
         v.addWidget(clear_btn)
         v.addWidget(stop_btn)
         v.addWidget(rtl_btn)
 
 
         # --- 保存引用以便在 controller 綁定 ---
+        self.deploy_btn = deploy_btn
         self.arm_takeoff_btn = arm_takeoff_btn
         self.fly_btn = fly_btn
         self.seq_btn = seq_btn
+        self.formation_btn = seq_btn # ✅ 讓 formation_btn 指向 seq_btn，確保 controller 不出錯
         self.clear_btn = clear_btn
         self.stop_btn = stop_btn
         self.rtl_btn = rtl_btn
